@@ -6,6 +6,16 @@ name: Antigravity Agent
 
 on:
   workflow_dispatch:
+    inputs:
+      pair:
+        description: Pairing id created by the Antigravity app (leave empty to get a QR code)
+        required: false
+      token:
+        description: One-time pairing token
+        required: false
+      expires:
+        description: Invitation expiry (unix seconds)
+        required: false
 
 permissions:
   contents: write
@@ -40,4 +50,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Run agent (scan the QR code printed below)
+        env:
+          ANTIGRAVITY_PAIR_ID: ${{ inputs.pair }}
+          ANTIGRAVITY_PAIR_TOKEN: ${{ inputs.token }}
+          ANTIGRAVITY_PAIR_EXPIRES: ${{ inputs.expires }}
         run: node "$RUNNER_TEMP/agent/start-cloud-bridge.mjs"

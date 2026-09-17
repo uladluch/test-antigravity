@@ -14,9 +14,13 @@ const INVITATION_LIFETIME_MS = 10 * 60 * 1000;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
 
-const pairId = crypto.randomUUID().toLowerCase();
-const token = crypto.randomBytes(24).toString("hex");
-const expiresAt = Math.floor((Date.now() + INVITATION_LIFETIME_MS) / 1000);
+// The app that dispatched the workflow normally supplies the invitation it
+// already registered; a manual run from the Actions tab falls back to a QR code.
+const suppliedInvitation = Boolean(process.env.ANTIGRAVITY_PAIR_ID && process.env.ANTIGRAVITY_PAIR_TOKEN);
+const pairId = (process.env.ANTIGRAVITY_PAIR_ID || crypto.randomUUID()).toLowerCase();
+const token = process.env.ANTIGRAVITY_PAIR_TOKEN || crypto.randomBytes(24).toString("hex");
+const expiresAt =
+  Number(process.env.ANTIGRAVITY_PAIR_EXPIRES) || Math.floor((Date.now() + INVITATION_LIFETIME_MS) / 1000);
 
 const link = new URL("https://luch.dev/antigravity");
 link.searchParams.set("pair", pairId);
@@ -32,14 +36,18 @@ fs.writeFileSync(
   { mode: 0o600 },
 );
 
-console.log("\nScan this code with the Antigravity app (valid for 10 minutes):\n");
-try {
-  const { default: qrcode } = await import("qrcode-terminal");
-  qrcode.generate(link.toString(), { small: true });
-} catch {
-  console.log("(QR renderer unavailable — open the link below as a QR code.)");
+if (suppliedInvitation) {
+  console.log("\nPairing invitation supplied by the app — no QR code needed.\n");
+} else {
+  console.log("\nScan this code with the Antigravity app (valid for 10 minutes):\n");
+  try {
+    const { default: qrcode } = await import("qrcode-terminal");
+    qrcode.generate(link.toString(), { small: true });
+  } catch {
+    console.log("(QR renderer unavailable — open the link below as a QR code.)");
+  }
+  console.log(`\n${link}\n`);
 }
-console.log(`\n${link}\n`);
 
 const bridge = spawn(
   process.execPath,

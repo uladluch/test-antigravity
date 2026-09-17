@@ -1,0 +1,43 @@
+# Runs the Antigravity agent for this repository without any computer.
+# Start it from the Actions tab, scan the QR code from the job log with the
+# Antigravity app, then chat from your phone. Compute is billed to this
+# repository's GitHub Actions minutes; Gemini usage to your own Google account.
+name: Antigravity Agent
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: antigravity-agent
+  cancel-in-progress: true
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install agent tools
+        run: |
+          npm install --global @google/gemini-cli@0.60.0
+          npm install --prefix "$RUNNER_TEMP/agent" node-pty@1.1.0 qrcode-terminal@0.12.0
+          cp .antigravity/cloud/bridge.mjs .antigravity/cloud/start-cloud-bridge.mjs "$RUNNER_TEMP/agent/"
+
+      - name: Configure git author
+        run: |
+          git config user.name "Antigravity Agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run agent (scan the QR code printed below)
+        run: node "$RUNNER_TEMP/agent/start-cloud-bridge.mjs"

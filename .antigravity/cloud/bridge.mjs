@@ -5580,7 +5580,7 @@ var require_phoenix_cjs = __commonJS({
        * Destroys and stops related timers.
        */
       teardown() {
-        this.pushBuffer.forEach((push) => push.destroy());
+        this.pushBuffer.forEach((push2) => push2.destroy());
         this.pushBuffer = [];
         this.rejoinTimer.reset();
         this.joinPush.destroy();
@@ -7274,9 +7274,9 @@ var require_channelAdapter = __commonJS({
         return this.channel.onError(callback);
       }
       push(event, payload, timeout) {
-        let push;
+        let push2;
         try {
-          push = this.channel.push(event, payload, timeout);
+          push2 = this.channel.push(event, payload, timeout);
         } catch (error) {
           throw new Error(`tried to push '${event}' to '${this.channel.topic}' before joining. Use channel.subscribe() before pushing events`);
         }
@@ -7285,7 +7285,7 @@ var require_channelAdapter = __commonJS({
           removedPush.cancelTimeout();
           this.socket.log("channel", `discarded push due to buffer overflow: ${removedPush.event}`, removedPush.payload());
         }
-        return push;
+        return push2;
       }
       updateJoinPayload(payload) {
         const oldPayload = this.channel.joinPush.payload();
@@ -7846,13 +7846,13 @@ var require_RealtimeChannel = __commonJS({
         } else {
           return new Promise((resolve2) => {
             var _a2, _b2, _c;
-            const push = this.channelAdapter.push(args.type, args, opts2.timeout || this.timeout);
+            const push2 = this.channelAdapter.push(args.type, args, opts2.timeout || this.timeout);
             if (args.type === "broadcast" && !((_c = (_b2 = (_a2 = this.params) === null || _a2 === void 0 ? void 0 : _a2.config) === null || _b2 === void 0 ? void 0 : _b2.broadcast) === null || _c === void 0 ? void 0 : _c.ack)) {
               resolve2("ok");
             }
-            push.receive("ok", () => resolve2("ok"));
-            push.receive("error", () => resolve2("error"));
-            push.receive("timeout", () => resolve2("timed out"));
+            push2.receive("ok", () => resolve2("ok"));
+            push2.receive("error", () => resolve2("error"));
+            push2.receive("timeout", () => resolve2("timed out"));
           });
         }
       }
@@ -16798,7 +16798,7 @@ var {
 } = import_index.default;
 
 // dist/index.js
-import { spawn as spawn3, execFileSync as execFileSync2, spawnSync } from "child_process";
+import { spawn as spawn3, execFileSync as execFileSync3, spawnSync } from "child_process";
 import { existsSync as existsSync8, mkdirSync as mkdirSync5, writeFileSync as writeFileSync5, readFileSync as readFileSync4, readdirSync as readdirSync3, statSync as statSync3, unlinkSync as unlinkSync2 } from "fs";
 import { homedir as homedir7 } from "os";
 import { dirname as dirname3, join as join6, relative as relative2, resolve as resolvePath2 } from "path";
@@ -17671,13 +17671,28 @@ function ensureGeminiFolderTrust(cwd) {
 function stripAnsi(str) {
   return str.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, "");
 }
+function lastOwnLineIndexOf(haystack, needle) {
+  let from = haystack.length;
+  while (from >= 0) {
+    const idx = haystack.lastIndexOf(needle, from);
+    if (idx === -1)
+      return -1;
+    const lineStart = haystack.lastIndexOf("\n", idx - 1) + 1;
+    const before = haystack.slice(lineStart, idx);
+    const after = haystack[idx + needle.length];
+    if (/^[\s>]*$/.test(before) && (after === void 0 || after === "\n"))
+      return idx;
+    from = idx - 1;
+  }
+  return -1;
+}
 function stripAgyHistory(rawBuffer, lastAssistantResponse, latestPrompt) {
   const buffer = rawBuffer.normalize("NFC").replace(/\r\n/g, "\n");
   const cleanBuffer = stripAnsi(buffer);
   if (latestPrompt) {
     const cleanPrompt = stripAnsi(latestPrompt).normalize("NFC").replace(/\r\n/g, "\n").trim();
     if (cleanPrompt) {
-      const idx = cleanBuffer.lastIndexOf(cleanPrompt);
+      const idx = lastOwnLineIndexOf(cleanBuffer, cleanPrompt);
       if (idx !== -1) {
         const targetCleanPos = idx + cleanPrompt.length;
         let cleanPos = 0;
@@ -17739,6 +17754,91 @@ function stripAgyHistory(rawBuffer, lastAssistantResponse, latestPrompt) {
     }
   }
   return { matched: false, remaining: buffer };
+}
+
+// dist/cloud-autosave.js
+import { execFileSync } from "node:child_process";
+var SUBJECT_LIMIT = 72;
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+function autosaveWorkspace(cwd, userRequest) {
+  const changes = git(cwd, ["status", "--porcelain"]);
+  if (changes) {
+    git(cwd, ["add", "--all"]);
+    git(cwd, ["commit", "--quiet", "--message", commitSubject(userRequest)]);
+  } else if (!hasUnpushedCommits(cwd)) {
+    return null;
+  }
+  const changedFiles = changes.split("\n").filter(Boolean).length;
+  try {
+    push(cwd);
+    return { changedFiles, commit: git(cwd, ["rev-parse", "--short", "HEAD"]), pushed: true };
+  } catch (error) {
+    return {
+      changedFiles,
+      commit: git(cwd, ["rev-parse", "--short", "HEAD"]),
+      pushed: false,
+      pushError: firstLine(error)
+    };
+  }
+}
+function hasUnpushedCommits(cwd) {
+  try {
+    return Number(git(cwd, ["rev-list", "--count", "@{upstream}..HEAD"])) > 0;
+  } catch {
+    return false;
+  }
+}
+function push(cwd) {
+  try {
+    git(cwd, ["push", "--quiet"]);
+  } catch {
+    try {
+      git(cwd, ["pull", "--rebase", "--quiet"]);
+    } catch (error) {
+      try {
+        git(cwd, ["rebase", "--abort"]);
+      } catch {
+      }
+      throw error;
+    }
+    git(cwd, ["push", "--quiet"]);
+  }
+}
+function commitSubject(userRequest) {
+  const request = userRequest.replace(/\s+/g, " ").trim() || "update";
+  const subject = `Antigravity: ${request}`;
+  return subject.length > SUBJECT_LIMIT ? `${subject.slice(0, SUBJECT_LIMIT - 1)}\u2026` : subject;
+}
+function firstLine(error) {
+  const stderr = error?.stderr;
+  const text = String(stderr || error?.message || error);
+  return text.split("\n").find((line) => line.trim())?.trim() ?? "unknown error";
+}
+function gitHubContextFromEnv(env = process.env) {
+  const { GITHUB_WORKSPACE, GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_REF_NAME } = env;
+  if (!GITHUB_WORKSPACE || !GITHUB_SERVER_URL || !GITHUB_REPOSITORY || !GITHUB_REF_NAME)
+    return null;
+  return {
+    workspace: GITHUB_WORKSPACE,
+    repositoryUrl: `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}`,
+    branch: GITHUB_REF_NAME
+  };
+}
+function presentSavedReply(reply, saved, github) {
+  const runnerPrefix = `file://${github.workspace.replace(/\/+$/, "")}/`;
+  const shown = reply.split(runnerPrefix).join(`${github.repositoryUrl}/blob/${github.branch}/`);
+  if (!saved)
+    return shown;
+  if (!saved.pushed) {
+    return `${shown}
+
+\u26A0\uFE0F These changes could not be saved to GitHub (${saved.pushError ?? "unknown error"}). They will be lost when this session ends.`;
+  }
+  return `${shown}
+
+\u2713 Saved to GitHub: ${github.repositoryUrl}/commit/${saved.commit}`;
 }
 
 // dist/chat-google-login.js
@@ -18552,7 +18652,7 @@ function uninstallAutostart() {
 
 // dist/sleep-lock.js
 import { existsSync as existsSync6 } from "node:fs";
-import { execFileSync, spawn as spawn2 } from "node:child_process";
+import { execFileSync as execFileSync2, spawn as spawn2 } from "node:child_process";
 var sleepLockChild = null;
 function preventSleepDisabledByEnv() {
   const raw = process.env.BRIDGE_PREVENT_SLEEP;
@@ -18566,7 +18666,7 @@ function resolveSystemdInhibitPath() {
       return p;
   }
   try {
-    const out = execFileSync("which", ["systemd-inhibit"], { encoding: "utf8", timeout: 2e3 }).trim();
+    const out = execFileSync2("which", ["systemd-inhibit"], { encoding: "utf8", timeout: 2e3 }).trim();
     return out.length > 0 ? out : null;
   } catch {
     return null;
@@ -28623,27 +28723,27 @@ async function handleGitCmd(action, filePath, directoryPath) {
       return;
     }
   }
-  const git = (args, max = 1024 * 1024) => execFileSync2("git", args, { cwd, encoding: "utf8", maxBuffer: max }).toString();
+  const git2 = (args, max = 1024 * 1024) => execFileSync3("git", args, { cwd, encoding: "utf8", maxBuffer: max }).toString();
   try {
     let result = {};
     switch (action) {
       case "status": {
-        const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
-        const statusShort = git(["status", "--porcelain"]).replace(/\n+$/, "");
+        const branch = git2(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+        const statusShort = git2(["status", "--porcelain"]).replace(/\n+$/, "");
         const files = statusShort.split("\n").filter((l) => l.length > 0).map((line) => ({
           status: line.substring(0, 2).trim(),
           file: line.substring(3)
         }));
         const ahead = (() => {
           try {
-            return parseInt(git(["rev-list", "--count", "@{u}..HEAD"]).trim(), 10);
+            return parseInt(git2(["rev-list", "--count", "@{u}..HEAD"]).trim(), 10);
           } catch {
             return 0;
           }
         })();
         const behind = (() => {
           try {
-            return parseInt(git(["rev-list", "--count", "HEAD..@{u}"]).trim(), 10);
+            return parseInt(git2(["rev-list", "--count", "HEAD..@{u}"]).trim(), 10);
           } catch {
             return 0;
           }
@@ -28652,7 +28752,7 @@ async function handleGitCmd(action, filePath, directoryPath) {
         break;
       }
       case "log": {
-        const log = git(["log", "--oneline", "-30", "--format=%H|||%h|||%s|||%an|||%ar|||%D"]).trim();
+        const log = git2(["log", "--oneline", "-30", "--format=%H|||%h|||%s|||%an|||%ar|||%D"]).trim();
         const commits = log.split("\n").filter(Boolean).map((line) => {
           const [hash, shortHash, message, author, timeAgo, refs] = line.split("|||");
           return { hash, shortHash, message, author, timeAgo, refs: refs || "" };
@@ -28661,7 +28761,7 @@ async function handleGitCmd(action, filePath, directoryPath) {
         break;
       }
       case "branches": {
-        const raw = git(["branch", "--format=%(refname:short)|||%(HEAD)|||%(upstream:short)"]).trim();
+        const raw = git2(["branch", "--format=%(refname:short)|||%(HEAD)|||%(upstream:short)"]).trim();
         const branches = raw.split("\n").filter(Boolean).map((line) => {
           const [name, isCurrent, upstream] = line.split("|||");
           return { name, isCurrent: isCurrent === "*", upstream: upstream || null };
@@ -28675,11 +28775,11 @@ async function handleGitCmd(action, filePath, directoryPath) {
           let unstaged = "";
           let staged = "";
           try {
-            unstaged = git(["diff", ...extra]);
+            unstaged = git2(["diff", ...extra]);
           } catch {
           }
           try {
-            staged = git(["diff", "--cached", ...extra]);
+            staged = git2(["diff", "--cached", ...extra]);
           } catch {
           }
           return { staged, unstaged };
@@ -28687,7 +28787,7 @@ async function handleGitCmd(action, filePath, directoryPath) {
         if (filePath) {
           let status = "";
           try {
-            status = git(["status", "--porcelain", "--", filePath]).trim();
+            status = git2(["status", "--porcelain", "--", filePath]).trim();
           } catch {
           }
           if (status.startsWith("??")) {
@@ -28725,14 +28825,14 @@ ${unstaged}` : staged || unstaged || "";
       }
       case "stage": {
         if (filePath) {
-          git(["add", "--", filePath]);
+          git2(["add", "--", filePath]);
           result = { action: "stage", success: true, filePath };
         }
         break;
       }
       case "unstage": {
         if (filePath) {
-          git(["restore", "--staged", "--", filePath]);
+          git2(["restore", "--staged", "--", filePath]);
           result = { action: "unstage", success: true, filePath };
         }
         break;
@@ -28740,16 +28840,16 @@ ${unstaged}` : staged || unstaged || "";
       case "restore": {
         if (!filePath)
           throw new Error("A file path is required for restore");
-        git(fileRestoreArgs(filePath));
+        git2(fileRestoreArgs(filePath));
         result = { action: "restore", success: true, filePath };
         break;
       }
       case "checkout": {
         if (!filePath)
           throw new Error("A branch name is required for checkout");
-        const localRefs = git(["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
+        const localRefs = git2(["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
         const branch = requireLocalBranch(filePath, localRefs);
-        git(branchCheckoutArgs(branch));
+        git2(branchCheckoutArgs(branch));
         result = { action: "checkout", success: true, branch, filePath: branch };
         break;
       }
@@ -29103,7 +29203,7 @@ async function handleExtensionCommand(action, slug, githubUrl) {
     }
     try {
       await bridge.sendExtensionStatus({ action: "installing", slug });
-      execFileSync2("gemini", ["extensions", "install", githubUrl], { encoding: "utf8", timeout: 12e4, stdio: "pipe", input: "Y\n" });
+      execFileSync3("gemini", ["extensions", "install", githubUrl], { encoding: "utf8", timeout: 12e4, stdio: "pipe", input: "Y\n" });
       await bridge.sendExtensionStatus({ action: "installed", slug });
       await broadcastInstalledExtensions();
     } catch (e) {
@@ -29120,7 +29220,7 @@ async function handleExtensionCommand(action, slug, githubUrl) {
   if (action === "uninstall") {
     try {
       await bridge.sendExtensionStatus({ action: "uninstalling", slug });
-      execFileSync2("gemini", ["extensions", "uninstall", slug], { encoding: "utf8", timeout: 3e4, stdio: "pipe", input: "Y\n" });
+      execFileSync3("gemini", ["extensions", "uninstall", slug], { encoding: "utf8", timeout: 3e4, stdio: "pipe", input: "Y\n" });
       await bridge.sendExtensionStatus({ action: "uninstalled", slug });
       await broadcastInstalledExtensions();
     } catch (e) {
@@ -29138,9 +29238,9 @@ async function handleExtensionCommand(action, slug, githubUrl) {
           await bridge.sendExtensionStatus({ action: "error", slug, error: "Extension not installed and no source URL provided" });
           return;
         }
-        execFileSync2("gemini", ["extensions", "install", githubUrl], { encoding: "utf8", timeout: 12e4, stdio: "pipe", input: "Y\n" });
+        execFileSync3("gemini", ["extensions", "install", githubUrl], { encoding: "utf8", timeout: 12e4, stdio: "pipe", input: "Y\n" });
       }
-      execFileSync2("gemini", ["extensions", "enable", "--scope=Workspace", slug], { cwd: chatsProjectPath(), encoding: "utf8", timeout: 3e4, stdio: "pipe", input: "Y\n" });
+      execFileSync3("gemini", ["extensions", "enable", "--scope=Workspace", slug], { cwd: chatsProjectPath(), encoding: "utf8", timeout: 3e4, stdio: "pipe", input: "Y\n" });
       await bridge.sendExtensionStatus({ action: "enabled", slug });
       await broadcastInstalledExtensions();
     } catch (e) {
@@ -29153,7 +29253,7 @@ async function handleExtensionCommand(action, slug, githubUrl) {
   if (action === "disable") {
     try {
       await bridge.sendExtensionStatus({ action: "disabling", slug });
-      execFileSync2("gemini", ["extensions", "disable", "--scope=Workspace", slug], { cwd: chatsProjectPath(), encoding: "utf8", timeout: 3e4, stdio: "pipe", input: "Y\n" });
+      execFileSync3("gemini", ["extensions", "disable", "--scope=Workspace", slug], { cwd: chatsProjectPath(), encoding: "utf8", timeout: 3e4, stdio: "pipe", input: "Y\n" });
       await bridge.sendExtensionStatus({ action: "disabled", slug });
       await broadcastInstalledExtensions();
     } catch (e) {
@@ -30032,6 +30132,16 @@ async function processMessage(message) {
       output = codeMsg ?? formatUserFacingError(response.output, message.model);
     } else {
       output = response.output;
+    }
+    const github = isCloudMode() ? gitHubContextFromEnv() : null;
+    if (github) {
+      let saved = null;
+      try {
+        saved = autosaveWorkspace(github.workspace, message.content || "");
+      } catch (err) {
+        console.error("[bridge] Autosave failed:", err?.message || err);
+      }
+      output = presentSavedReply(output, saved, github);
     }
     await bridge.sendReply(output, message.id, message.model, status);
     try {

@@ -32,7 +32,7 @@ const claimDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "antigravity-pair-"
 const claimFile = path.join(claimDirectory, "claim.json");
 fs.writeFileSync(
   claimFile,
-  JSON.stringify({ pairId, token, cliType: "gemini", waitForPair: true, expiresAt }),
+  JSON.stringify({ pairId, token, cliType: "antigravity", waitForPair: true, expiresAt }),
   { mode: 0o600 },
 );
 
@@ -63,7 +63,9 @@ const bridge = spawn(
       // The checkout is the user's own repository; under CI=true the CLI would
       // otherwise refuse to run in it.
       GEMINI_CLI_TRUST_WORKSPACE: "true",
-      BRIDGE_CLI_TYPE: "gemini",
+      // Google retired "Login with Google" for Gemini CLI on personal accounts;
+      // Antigravity CLI is the agent that still runs on the user's own quota.
+      BRIDGE_CLI_TYPE: "antigravity",
       BRIDGE_NATIVE_APP: "1",
       NO_COLOR: "1",
     },

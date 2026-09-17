@@ -18003,6 +18003,7 @@ var ChatGoogleLogin = class {
   timeoutMs;
   pollMs;
   awaitingCode = false;
+  cliExited = false;
   cli = null;
   output = "";
   constructor(options) {
@@ -18012,23 +18013,31 @@ var ChatGoogleLogin = class {
   }
   /** Consumes one chat message while signed out and returns the reply to send. */
   async handleMessage(text) {
+    let expired = false;
     if (this.awaitingCode && this.cli) {
-      this.cli.write(`${text.trim()}\r`);
-      const accepted = await this.waitUntilSignedIn();
-      this.stopCli();
-      if (accepted) {
-        return "[GOOGLE_SIGNED_IN] You're signed in to Google. Send your request again and I'll get to work.";
+      if (this.cliExited) {
+        expired = true;
+        this.stopCli();
+      } else {
+        this.cli.write(`${text.trim()}\r`);
+        const accepted = await this.waitUntilSignedIn();
+        this.stopCli();
+        if (accepted) {
+          return "[GOOGLE_SIGNED_IN] You're signed in to Google. Send your request again and I'll get to work.";
+        }
       }
     }
     const url = await this.startAndWaitForLink();
     this.awaitingCode = true;
-    return signInReply(url);
+    return signInReply(url, this.options.codeWindowSeconds, expired);
   }
   async waitUntilSignedIn() {
     const deadline = Date.now() + this.timeoutMs;
     while (Date.now() < deadline) {
       if (this.options.isSignedIn())
         return true;
+      if (this.cliExited)
+        break;
       await new Promise((resolve2) => setTimeout(resolve2, this.pollMs));
     }
     return this.options.isSignedIn();
@@ -18043,6 +18052,7 @@ var ChatGoogleLogin = class {
   }
   async startAndWaitForLink() {
     this.output = "";
+    this.cliExited = false;
     const cli = await this.options.startCli();
     this.cli = cli;
     return new Promise((resolve2, reject) => {
@@ -18066,6 +18076,7 @@ var ChatGoogleLogin = class {
         }
       });
       cli.onExit?.(() => {
+        this.cliExited = true;
         clearTimeout(timer);
         const tail = this.output.replace(ANSI_PATTERN, "").trim().split(/\r?\n/).slice(-3).join(" ").slice(-300);
         reject(new Error(`The CLI quit before offering a Google sign-in link. ${tail}`.trim()));
@@ -18073,13 +18084,14 @@ var ChatGoogleLogin = class {
     });
   }
 };
-function signInReply(url) {
+function signInReply(url, codeWindowSeconds, previousExpired = false) {
   return [
-    "[GOOGLE_SIGN_IN] One-time setup: sign in to Google so the agent can use your Gemini quota.",
+    previousExpired ? "[GOOGLE_SIGN_IN] That sign-in attempt expired before the code arrived. Here is a fresh link." : "[GOOGLE_SIGN_IN] One-time setup: sign in to Google so the agent can use your own quota.",
     "",
     `1. Open this link and sign in: ${url}`,
     "2. Google will show you a code. Copy it.",
-    "3. Send the code here as your next message."
+    "3. Send the code here as your next message.",
+    ...codeWindowSeconds ? ["", `You have ${codeWindowSeconds} seconds from now. If it runs out, send any message for a new link.`] : []
   ].join("\n");
 }
 function hasGoogleCredentials(home = homedir4()) {
@@ -18089,6 +18101,33 @@ function hasGoogleCredentials(home = homedir4()) {
   ].some((file) => existsSync4(file));
 }
 async function startGeminiLoginCli(command, args, cwd) {
+  return spawnLoginTerminal(command, args, cwd, {
+    NO_BROWSER: "true",
+    GOOGLE_GENAI_USE_GCA: "true",
+    // CI runners set CI=true, where the CLI refuses an untrusted workspace
+    // outright instead of asking.
+    GEMINI_CLI_TRUST_WORKSPACE: "true"
+  });
+}
+var ANTIGRAVITY_CODE_WINDOW_SECONDS = 60;
+var AntigravityLogin = class {
+  succeeded = false;
+  get isSignedIn() {
+    return this.succeeded;
+  }
+  async startCli(command, cwd) {
+    const terminal = await spawnLoginTerminal(command, ["--print", "Reply with the single word OK."], cwd, {});
+    return {
+      ...terminal,
+      onExit: (next) => terminal.onExit?.((exitCode) => {
+        if (exitCode === 0)
+          this.succeeded = true;
+        next(exitCode);
+      })
+    };
+  }
+};
+async function spawnLoginTerminal(command, args, cwd, extraEnv) {
   const pty = await loadPty();
   if (!pty)
     throw new Error("node-pty is not available, so Google sign-in from chat cannot start.");
@@ -18097,15 +18136,7 @@ async function startGeminiLoginCli(command, args, cwd) {
     cols: 250,
     rows: 50,
     cwd,
-    // CI runners set CI=true, where the CLI refuses an untrusted workspace
-    // outright instead of asking.
-    env: {
-      ...interactiveEnv(process.env),
-      NO_BROWSER: "true",
-      GOOGLE_GENAI_USE_GCA: "true",
-      GEMINI_CLI_TRUST_WORKSPACE: "true",
-      TERM: "xterm-256color"
-    }
+    env: { ...interactiveEnv(process.env), ...extraEnv, TERM: "xterm-256color" }
   });
   let buffered = "";
   let listener = null;
@@ -18114,6 +18145,13 @@ async function startGeminiLoginCli(command, args, cwd) {
       listener(data);
     else
       buffered += data;
+  });
+  const exitListeners = [];
+  let exited = null;
+  proc.onExit((event) => {
+    exited = event.exitCode;
+    for (const next of exitListeners)
+      next(event.exitCode);
   });
   return {
     onData(next) {
@@ -18124,7 +18162,12 @@ async function startGeminiLoginCli(command, args, cwd) {
     },
     write: (data) => proc.write(data),
     kill: () => proc.kill(),
-    onExit: (next) => proc.onExit(() => next())
+    onExit(next) {
+      if (exited !== null)
+        next(exited);
+      else
+        exitListeners.push(next);
+    }
   };
 }
 function interactiveEnv(env) {
@@ -28748,6 +28791,9 @@ async function ensureTerminalActive() {
 }
 function classifyBridgeError(raw) {
   const text = raw.toLowerCase();
+  if (text.includes("ineligibletiererror") || text.includes("no longer supported for gemini code assist") || text.includes("migrate to the antigravity suite")) {
+    return "gemini_cli_retired";
+  }
   if (text.includes("gemini_api_key") || text.includes("must specify the gemini api key")) {
     return "missing_api_key";
   }
@@ -28777,6 +28823,11 @@ function classifyBridgeError(raw) {
 function renderClassifiedBridgeError(kind, requestedModel) {
   const modelHint = requestedModel ? ` (${requestedModel})` : "";
   switch (kind) {
+    case "gemini_cli_retired":
+      return [
+        "[GEMINI_CLI_RETIRED] Google no longer lets personal Google accounts use Gemini CLI.",
+        "Switch this connection to Antigravity: install the Antigravity CLI on your computer (https://antigravity.google), then choose Antigravity in the connector and reconnect."
+      ].join("\n");
     case "missing_api_key":
       return [
         `[AUTH_MISSING_KEY] ${config.cliType === "antigravity" ? "Antigravity" : "Gemini"} API key is not configured on this computer.`,
@@ -29820,14 +29871,37 @@ function isCloudMode() {
   return /^(1|true|yes|on)$/i.test((process.env.BRIDGE_CLOUD_MODE || "").trim());
 }
 var cloudLogin = null;
+var antigravityLogin = new AntigravityLogin();
+function cloudNeedsGoogleLogin() {
+  if (!isCloudMode() || process.env.GEMINI_API_KEY)
+    return false;
+  return config.cliType === "antigravity" ? !antigravityLogin.isSignedIn : !hasGoogleCredentials();
+}
 function cloudGoogleLogin() {
-  cloudLogin ??= new ChatGoogleLogin({
-    isSignedIn: hasGoogleCredentials,
-    startCli: () => {
-      const plan = geminiPath && !useNpxFallback ? resolveGeminiSpawnPlan(geminiPath, []) : buildNpxFallbackSpawnPlan([]);
-      return startGeminiLoginCli(plan.command, plan.args, config.projectPath || process.cwd());
-    }
-  });
+  if (cloudLogin)
+    return cloudLogin;
+  const cwd = config.projectPath || process.cwd();
+  if (config.cliType === "antigravity") {
+    cloudLogin = new ChatGoogleLogin({
+      isSignedIn: () => antigravityLogin.isSignedIn,
+      codeWindowSeconds: ANTIGRAVITY_CODE_WINDOW_SECONDS,
+      // Its answer to the throwaway prompt can take a while after the code lands.
+      timeoutMs: 12e4,
+      startCli: () => {
+        if (!geminiPath)
+          throw new Error("Antigravity CLI is not installed on this runner.");
+        return antigravityLogin.startCli(geminiPath, cwd);
+      }
+    });
+  } else {
+    cloudLogin = new ChatGoogleLogin({
+      isSignedIn: hasGoogleCredentials,
+      startCli: () => {
+        const plan = geminiPath && !useNpxFallback ? resolveGeminiSpawnPlan(geminiPath, []) : buildNpxFallbackSpawnPlan([]);
+        return startGeminiLoginCli(plan.command, plan.args, cwd);
+      }
+    });
+  }
   return cloudLogin;
 }
 async function processMessage(message) {
@@ -29839,7 +29913,7 @@ async function processMessage(message) {
       cancelRequestedMessageId = null;
       return;
     }
-    if (isCloudMode() && !process.env.GEMINI_API_KEY && !hasGoogleCredentials()) {
+    if (cloudNeedsGoogleLogin()) {
       await bridge.markAsProcessing(message.id);
       let reply;
       try {
@@ -29952,6 +30026,9 @@ async function processMessage(message) {
     let output;
     if (status === "error") {
       const codeMsg = exitCodeMessage(response.exitCode);
+      if (isCloudMode()) {
+        console.error(`[bridge] CLI failed (exit ${response.exitCode}): ${String(response.output || "").slice(-800)}`);
+      }
       output = codeMsg ?? formatUserFacingError(response.output, message.model);
     } else {
       output = response.output;

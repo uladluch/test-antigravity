@@ -18130,7 +18130,7 @@ async function startGeminiLoginCli(command, args, cwd) {
 function interactiveEnv(env) {
   const result = {};
   for (const [name, value] of Object.entries(env)) {
-    if (name === "CI" || name === "CONTINUOUS_INTEGRATION" || name.startsWith("CI_"))
+    if (name === "CI" || name === "CONTINUOUS_INTEGRATION" || name === "GITHUB_ACTIONS" || name.startsWith("CI_"))
       continue;
     result[name] = value;
   }

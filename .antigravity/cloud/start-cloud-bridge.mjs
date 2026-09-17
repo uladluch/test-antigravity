@@ -42,7 +42,9 @@ if (suppliedInvitation) {
   console.log("\nScan this code with the Antigravity app (valid for 10 minutes):\n");
   try {
     const { default: qrcode } = await import("qrcode-terminal");
-    qrcode.generate(link.toString(), { small: true });
+    // Full-size blocks: GitHub's log viewer adds line spacing that makes the
+    // compact half-block rendering unscannable.
+    qrcode.generate(link.toString(), { small: false });
   } catch {
     console.log("(QR renderer unavailable — open the link below as a QR code.)");
   }
